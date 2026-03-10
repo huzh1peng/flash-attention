@@ -103,12 +103,16 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
     dv_golden_npu = v.grad
     torch.npu.synchronize()
 
+    # convert max + sum to LSE: lse = max + log(sum), shape [T, N, 8] -> [T, N, 1]
+    softmax_lse = (x_max_npu[..., 0:1] + torch.log(x_sum_npu[..., 0:1])).contiguous()
+
     cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int64).cpu()
     cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int64).cpu()
 
     # call tridao npu interface
     print("cu_seqlens_q is ", cu_seqlens_q)
     print("cu_seqlens_k is ", cu_seqlens_k)
+    print("softmax_lse.shape ", softmax_lse.shape)
 
     dq_tridao, dk_tridao, dv_tridao = flash_attn_varlen_func_backward(
         dout,
@@ -116,9 +120,7 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
         k,
         v,
         out_npu,
-        # cpu_softmax_log_sum_nt.float(),
-        x_max_npu,
-        x_sum_npu,
+        softmax_lse,
         cu_seqlens_q,
         cu_seqlens_k,
         max_seqlen_q,
