@@ -56,7 +56,7 @@ public:
     GlobalTensor<float> mm1WorkspaceGm;
     GlobalTensor<float> mm2WorkspaceGm;
     GlobalTensor<half> dropWorkSpaceGm, mulWorkSpaceGm;
-    GlobalTensor<float> rowMaxGm, rowSumGm;
+    GlobalTensor<float> rowLseGm;
     GlobalTensor<float> sfmgWorkspaceGm;
 
     constexpr static uint32_t DTYPE_FACTOR = sizeof(float) / sizeof(half);
@@ -122,6 +122,7 @@ public:
 
     // offset 
     int32_t sfmgOffset = 0;
+    int32_t lseOffset = 0;
 
     int64_t copyInOffset = 0;
     int64_t copyOutOffset = 0;
@@ -134,8 +135,8 @@ public:
     SoftMaxTiling softmaxTilingData;
 
     CATLASS_DEVICE
-    BlockEpilogue(Arch::Resource<ArchTag> &resource, AscendC::TPipe *pipe_in, __gm__ uint8_t *row_max,
-    __gm__ uint8_t *row_sum, __gm__ uint8_t *atten_mask, __gm__ uint8_t *cu_seq_qlen,
+    BlockEpilogue(Arch::Resource<ArchTag> &resource, AscendC::TPipe *pipe_in, __gm__ uint8_t *row_lse,
+    __gm__ uint8_t *atten_mask, __gm__ uint8_t *cu_seq_qlen,
     __gm__ uint8_t *cu_seq_kvlen, __gm__ uint8_t * workspace, int32_t batchIn, __gm__ uint8_t * tiling_in)
     {
         b = batchIn;
@@ -195,8 +196,7 @@ public:
 
         pipe->InitBuffer(unifiedBuffer, TOTAL_SIZE);
         // global tensor
-        rowMaxGm.SetGlobalBuffer((__gm__ float *)row_max);
-        rowSumGm.SetGlobalBuffer((__gm__ float *)row_sum);
+        rowLseGm.SetGlobalBuffer((__gm__ float *)row_lse);
         attenMaskU8Gm.SetGlobalBuffer((__gm__ uint8_t *)atten_mask);
 
         mm1WorkspaceGm.SetGlobalBuffer((__gm__ float *)(workspace + mm1WorkSpaceOffset));
@@ -273,10 +273,14 @@ public:
     CATLASS_DEVICE
     void CopyInSoftMax(LocalTensor<float> &dstTensor, uint32_t s1Extend, uint32_t softMaxOffset)
     {
-        AscendC::DataCopyPad(dstTensor, rowSumGm[softMaxOffset], {1, static_cast<uint16_t>(s1Extend * BLOCK_SIZE), 0, 0},
-                    {false, 0, 0, 0});
-        AscendC::DataCopyPad(dstTensor[64 * 8], rowMaxGm[softMaxOffset],
-                    {1, static_cast<uint16_t>(s1Extend * BLOCK_SIZE), 0, 0}, {false, 0, 0, 0});
+        AscendC::DataCopyPad(dstTensor, rowLseGm[softMaxOffset],
+                    {1, static_cast<uint16_t>(s1Extend * sizeof(float)), 0, 0}, {false, 0, 0, 0});
+        event_t eventId = static_cast<event_t>(GetTPipePtr()->FetchEventID(AscendC::HardEvent::MTE2_V));
+        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(eventId);
+        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(eventId);
+        AscendC::Brcb(dstTensor[64 * 8], dstTensor, (s1Extend + 7) / 8, {1, 8});
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Duplicate(dstTensor, 1.0f, s1Extend * 8);
     }
 
     CATLASS_DEVICE
@@ -295,7 +299,6 @@ public:
             AscendC::SimpleSoftMax<float, false, true>(dstTensor, src1Tensor, src1Tensor[64 * 8], src0Tensor,
                                         sharedTmp, tiling);
         } else {
-            AscendC::LocalTensor<float> vecOutBuffer = unifiedBuffer.GetWithOffset<float>(TMP_UB_SIZE / sizeof(float), TMP_UB_OFFSET);
             uint32_t sub_block_count = (s2Extend + cal_repeat_num - 1) / cal_repeat_num;
 
             for(uint32_t subIdx = 0; subIdx < sub_block_count; subIdx++) {
@@ -305,15 +308,10 @@ public:
                         {static_cast<uint8_t>(1), static_cast<uint8_t>(1), 0,
                         static_cast<uint8_t>(s2ExtendAlign / 8), static_cast<uint8_t>(s2ExtendAlign / 8), 1});
                 AscendC::PipeBarrier<PIPE_V>();
-                AscendC::Exp(vecOutBuffer[subIdx * cal_repeat_num], dstTensor[subIdx * cal_repeat_num],
+                AscendC::Exp(dstTensor[subIdx * cal_repeat_num], dstTensor[subIdx * cal_repeat_num],
                     subMaskCount, s1Extend,
                         {static_cast<uint8_t>(1), static_cast<uint8_t>(1),
                         static_cast<uint8_t>(s2ExtendAlign / 8), static_cast<uint8_t>(s2ExtendAlign / 8)});
-                AscendC::PipeBarrier<PIPE_V>();
-                AscendC::Div(dstTensor[subIdx * cal_repeat_num], vecOutBuffer[subIdx * cal_repeat_num], src1Tensor,
-                        subMaskCount, s1Extend,
-                        {static_cast<uint8_t>(1), static_cast<uint8_t>(1), 0,
-                        static_cast<uint8_t>(s2ExtendAlign / 8), static_cast<uint8_t>(s2ExtendAlign / 8), 1});
                 AscendC::PipeBarrier<PIPE_V>();
             }
         }
@@ -331,7 +329,7 @@ public:
         AscendC::LocalTensor<float> vecInBuffer3 =
             unifiedBuffer.GetWithOffset<float>(8 * 1024 / sizeof(float), ubBufferOffset + T2BlockBegin);
         
-        CopyInSoftMax(vecInBuffer3, s1Extend, sfmgOffset);
+        CopyInSoftMax(vecInBuffer3, s1Extend, lseOffset);
 
         AscendC::LocalTensor<float> vecClc2Buffer =
             unifiedBuffer.GetWithOffset<float>(32 * 1024 / sizeof(float), ubBufferOffset + T2Begin);
@@ -476,10 +474,13 @@ public:
             s2ExtendAlign = (s2Extend + 15) / 16 * 16;
 
             //offset
+            lseOffset = 0;
             sfmgOffset = 0;
             if (blockInfo.batchIdx > 0) {
-                sfmgOffset = ((__gm__ int64_t *)cu_seq_qlen_addr)[blockInfo.batchIdx - 1] * nheads_k * g * 8;
+                lseOffset = ((__gm__ int64_t *)cu_seq_qlen_addr)[blockInfo.batchIdx - 1] * nheads_k * g;
+                sfmgOffset = lseOffset * 8;
             }
+            lseOffset += (blockInfo.nheadsKIdx * g + blockInfo.gIdx) * cuQSeqLen + blockInfo.SeqQIdx * S1_CUBESIZE + curSeqQIdx * s1VecSize;
             sfmgOffset += ((blockInfo.nheadsKIdx * g + blockInfo.gIdx) * cuQSeqLen + blockInfo.SeqQIdx * S1_CUBESIZE + curSeqQIdx * s1VecSize) * 8;
             
             // copyIn cube_workspace params

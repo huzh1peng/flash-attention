@@ -340,9 +340,7 @@ def _flash_attn_varlen_backward(
     k: torch.Tensor,
     v: torch.Tensor,
     out: torch.Tensor,
-    # softmax_lse: torch.Tensor,
-    softmax_max: torch.Tensor,
-    softmax_sum: torch.Tensor,
+    softmax_lse: torch.Tensor,
     dq: Optional[torch.Tensor],
     dk: Optional[torch.Tensor],
     dv: Optional[torch.Tensor],
@@ -361,8 +359,6 @@ def _flash_attn_varlen_backward(
     rng_state: Optional[torch.Tensor] = None,
     zero_tensors: bool = False,
 ) -> torch.Tensor:
-    # dq, dk, dv are allocated by us so they should already be contiguous
-    print("call custom op wrapper")
     dout, q, k, v, out = [maybe_contiguous(x) for x in (dout, q, k, v, out)]
     (
         dq,
@@ -375,9 +371,7 @@ def _flash_attn_varlen_backward(
         k,
         v,
         out,
-        # softmax_lse,
-        softmax_max,
-        softmax_sum,
+        softmax_lse,
         dq,
         dk,
         dv,
@@ -397,8 +391,6 @@ def _flash_attn_varlen_backward(
         None,
         rng_state,
     )
-    # if dk.isnan().any() or dk.isnan().any() or dv.isnan().any() or softmax_d.isnan().any():
-    #     breakpoint()
     return softmax_d
 
 
@@ -1624,9 +1616,7 @@ def flash_attn_with_kvcache(
 # direct varlen backward interface
 def flash_attn_varlen_func_backward(
     dout, q, k, v, out,
-    # softmax_lse,
-    softmax_max,
-    softmax_sum,
+    softmax_lse,
     cu_seqlens_q,
     cu_seqlens_k,
     max_seqlen_q,
@@ -1652,9 +1642,7 @@ def flash_attn_varlen_func_backward(
         k,
         v,
         out,
-        # softmax_lse,
-        softmax_max,
-        softmax_sum,
+        softmax_lse,
         dq,
         dk,
         dv,

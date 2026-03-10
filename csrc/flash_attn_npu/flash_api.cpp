@@ -231,9 +231,7 @@ mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads 
                const at::Tensor &k,                      // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &v,                      // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                const at::Tensor &out,                    // total_q x num_heads x head_size
-            //    const at::Tensor &softmax_lse,            // b x h x s   softmax logsumexp
-               const at::Tensor &softmax_max,            // b x h x s   softmax max
-               const at::Tensor &softmax_sum,            // b x h x s   softmax sum
+               const at::Tensor &softmax_lse,            // h x total_q   softmax logsumexp
                std::optional<at::Tensor> &dq_,           // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
                std::optional<at::Tensor> &dk_,           // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
                std::optional<at::Tensor> &dv_,           // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
@@ -331,8 +329,7 @@ mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads 
     }
     auto cuSeqQlenDevice = static_cast<uint8_t *>(const_cast<void *>(seqlenq_gpu_tensor.storage().data()));
     auto cuSeqKvlenDevice = static_cast<uint8_t *>(const_cast<void *>(seqlenk_gpu_tensor.storage().data()));
-    auto softMaxMaxDevice = static_cast<uint8_t *>(const_cast<void *>(softmax_max.storage().data()));
-    auto softMaxSumDevice = static_cast<uint8_t *>(const_cast<void *>(softmax_sum.storage().data()));
+    auto softMaxLseDevice = static_cast<uint8_t *>(const_cast<void *>(softmax_lse.storage().data()));
 
     auto workspaceDevice = static_cast<uint8_t *>(const_cast<void *>(workspace_tensor.storage().data()));
     auto tilingDevice = static_cast<uint8_t *>(const_cast<void *>(tiling_gpu_tensor.storage().data()));
@@ -351,7 +348,7 @@ mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads 
         
         FAG::FAG<<<blockDim, nullptr, aclStream>>>(
             fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
-            attenMaskDevice, softMaxMaxDevice, softMaxSumDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
+            attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
             nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, ptrDumpDevice);
         aclCheck(aclrtSynchronizeStream(aclStream));
         std::cout << "begin print workspace " << std::endl;
@@ -360,7 +357,7 @@ mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads 
     #else
         FAG<<<blockDim, nullptr, aclStream>>>(
             fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
-            attenMaskDevice, softMaxMaxDevice, softMaxSumDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
+            attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
             nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, nullptr);
     #endif
     auto opts = q.options();
