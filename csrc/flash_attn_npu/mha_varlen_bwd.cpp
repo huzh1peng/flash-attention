@@ -96,8 +96,7 @@ public:
         GM_ADDR drop_mask;
         GM_ADDR padding_mask; 
         GM_ADDR atten_mask;
-        GM_ADDR row_max;
-        GM_ADDR row_sum;
+        GM_ADDR row_lse;
         GM_ADDR row_in; 
         GM_ADDR out;
         GM_ADDR prefix;
@@ -121,14 +120,14 @@ public:
             GM_ADDR q_, GM_ADDR k_, GM_ADDR v_, GM_ADDR dout_,
             GM_ADDR q_right_, GM_ADDR k_right_, GM_ADDR pse_shift_,
             GM_ADDR drop_mask_, GM_ADDR padding_mask_, GM_ADDR atten_mask_,
-            GM_ADDR row_max_, GM_ADDR row_sum_, GM_ADDR row_in_, 
+            GM_ADDR row_lse_, GM_ADDR row_in_, 
             GM_ADDR out_, GM_ADDR prefix_, GM_ADDR cu_seq_qlen_, 
             GM_ADDR cu_seq_kvlen_, GM_ADDR q_start_idx_, GM_ADDR kv_start_idx_, 
             GM_ADDR dq_, GM_ADDR dk_, GM_ADDR dv_, GM_ADDR workspace_, GM_ADDR tiling_data_, GM_ADDR ptrDump_
         ) : q(q_), k(k_), v(v_), dout(dout_),
             q_right(q_right_), k_right(k_right_), pse_shift(pse_shift_),
             drop_mask(drop_mask_), padding_mask(padding_mask_), atten_mask(atten_mask_),
-            row_max(row_max_), row_sum(row_sum_), row_in(row_in_), 
+            row_lse(row_lse_), row_in(row_in_), 
             out(out_), prefix(prefix_), cu_seq_qlen(cu_seq_qlen_), 
             cu_seq_kvlen(cu_seq_kvlen_), q_start_idx(q_start_idx_), kv_start_idx(kv_start_idx_), 
             dq(dq_), dk(dk_), dv(dv_), workspace(workspace_), tiling_data(tiling_data_), ptrDump(ptrDump_)
@@ -258,7 +257,7 @@ public:
 
         // vector process
         AscendC::TPipe pipeVec;
-        EpilogueFAGOp epilogueFagOp(resource, &pipeVec, params.row_max, params.row_sum,
+        EpilogueFAGOp epilogueFagOp(resource, &pipeVec, params.row_lse,
             params.atten_mask, (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_qlen + 1), (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_kvlen + 1), params.workspace, batch, params.tiling_data);
 
         // AscendC::PRINTF("ENTER FAG KERNEL AIV %d\n", GetBlockIdx());
@@ -338,7 +337,7 @@ void FAG(uint64_t fftsAddr,
         GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR dout,
         GM_ADDR q_right, GM_ADDR k_right, 
         GM_ADDR pse_shift, GM_ADDR drop_mask, GM_ADDR padding_mask, 
-        GM_ADDR atten_mask, GM_ADDR row_max, GM_ADDR row_sum, GM_ADDR row_in, 
+        GM_ADDR atten_mask, GM_ADDR row_lse, GM_ADDR row_in, 
         GM_ADDR out, GM_ADDR prefix, GM_ADDR cu_seq_qlen, 
         GM_ADDR cu_seq_kvlen, GM_ADDR q_start_idx, GM_ADDR kv_start_idx, 
         GM_ADDR dq, GM_ADDR dk, GM_ADDR dv,
@@ -438,7 +437,7 @@ void FAG(uint64_t fftsAddr,
         q, k, v, dout,
         q_right, k_right, pse_shift,
         drop_mask, padding_mask, atten_mask,
-        row_max, row_sum, row_in, 
+        row_lse, row_in, 
         out, prefix, cu_seq_qlen, 
         cu_seq_kvlen, q_start_idx, kv_start_idx, 
         dq, dk, dv, workspace, tiling_data, ptrDump};
