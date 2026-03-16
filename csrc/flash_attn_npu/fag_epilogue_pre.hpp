@@ -24,14 +24,11 @@
 namespace Catlass::Epilogue::Block {
 
 template <
-    class OutputType_,
-    class UpdateType_,
-    class InputType_>
+    typename ElementVecDtype
+>
 class BlockEpilogue<
     EpilogueAtlasA2FAGPre,
-    OutputType_,
-    UpdateType_,
-    InputType_>
+    ElementVecDtype>
 {
 public:
     using DispatchPolicy = EpilogueAtlasA2FAGPre;
