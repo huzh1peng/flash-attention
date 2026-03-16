@@ -726,27 +726,35 @@ mha_varlen_bwd(const at::Tensor &dout,                   // total_q x num_heads 
     auto dvDevice = static_cast<uint8_t *>(const_cast<void *>(dv.storage().data()));
 
     #if defined(ENABLE_ASCENDC_DUMP)
-        // alloc ptr
-        std::cout << "call dump function " << std::endl;
-        // at::Tensor ptrDump_tensor = at::empty({static_cast<uint8_t>(ALL_DUMPSIZE)}, at::device(at::kPrivateUse1).dtype(at::kByte));
-        // auto ptrDumpDevice = static_cast<uint8_t *>(const_cast<void *>(ptrDump_tensor.storage().data()));
 
         uint8_t *ptrDumpDevice{nullptr};
         aclCheck(aclrtMalloc(reinterpret_cast<void **>(&ptrDumpDevice), ALL_DUMPSIZE, ACL_MEM_MALLOC_HUGE_FIRST));
-        
-        FAG::FAG<<<blockDim, nullptr, aclStream>>>(
-            fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
-            attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
-            nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, ptrDumpDevice);
+        if (is_bf16) {
+            FAG::FAG<bfloat16_t><<<blockDim, nullptr, aclStream>>>(
+                fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
+                attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
+                nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, ptrDumpDevice);
+        } else {
+            FAG::FAG<half><<<blockDim, nullptr, aclStream>>>(
+                fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
+                attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
+                nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, ptrDumpDevice);
+        }
         aclCheck(aclrtSynchronizeStream(aclStream));
-        std::cout << "begin print workspace " << std::endl;
         Adx::AdumpPrintWorkSpace(ptrDumpDevice, ALL_DUMPSIZE, aclStream, "device_fag");
         aclCheck(aclrtFree(ptrDumpDevice));
     #else
-        FAG<<<blockDim, nullptr, aclStream>>>(
-            fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
-            attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
-            nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, nullptr);
+        if (is_bf16) {
+            FAG<bfloat16_t><<<blockDim, nullptr, aclStream>>>(
+                fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
+                attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
+                nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, nullptr);
+        } else {
+            FAG<half><<<blockDim, nullptr, aclStream>>>(
+                fftsAddr, qDevice, kDevice, vDevice, dOutDevice, nullptr, nullptr, nullptr, nullptr, nullptr,
+                attenMaskDevice, softMaxLseDevice, nullptr, outDevice, nullptr, cuSeqQlenDevice, cuSeqKvlenDevice,
+                nullptr, nullptr, dqDevice, dkDevice, dvDevice, workspaceDevice, tilingDevice, nullptr);
+        }
     #endif
     auto opts = q.options();
     auto softmax_d = torch::empty({fagInfo.seqQShapeSize, nheads, max_seqlen_q}, opts.dtype(at::kFloat));
