@@ -5,7 +5,7 @@ import torch_npu
 import pytest
 import flash_attn_2_cuda
 import numpy as np
-from flash_attn import flash_attn_varlen_func_backward
+from flash_attn import flash_attn_varlen_func, flash_attn_varlen_func_backward
 
 torch.npu.set_device(1)
 np.random.seed(3)
@@ -40,7 +40,7 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
     print("cu_seq_len_list is ", cu_seq_len_list)
     print("cu_seq_kvlen_list is ", cu_seq_kvlen_list)
     
-    pttype = torch.float16
+    pttype = torch.bfloat16
     limit = 2
     q = limit * (torch.rand([total_q, nheads, headdim]) - 0.5).to(pttype)
     k = limit * (torch.rand([total_k, nheads_k, headdim]) - 0.5).to(pttype)
@@ -66,6 +66,8 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
     causal_switch = True
     window_left = 65536
     window_right = 0
+    window_left = -1
+    window_right = -1
 
     # call npu_fusion_attention golden
     q = q.npu()
@@ -78,21 +80,23 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
     k.requires_grad = True
     v.requires_grad = True
     torch.npu.synchronize()
+    # TODO golden replace
     npu_rst = torch_npu.npu_fusion_attention(
-            q, k, v, nheads,
-            pse=None,
-            padding_mask=None,
-            atten_mask=atten_mask_npu,
-            scale=scale,
-            keep_prob=keep_prob,
-            input_layout="TND",
-            actual_seq_qlen=tuple(cu_seq_len_list),
-            actual_seq_kvlen=tuple(cu_seq_kvlen_list),
-            pre_tockens=pre_tocken,
-            next_tockens=next_tocken,
-            inner_precise=0,
-            sparse_mode=sparse_mode,
-            prefix=None)
+        q, k, v, nheads,
+        pse=None,
+        padding_mask=None,
+        atten_mask=atten_mask_npu,
+        scale=scale,
+        keep_prob=keep_prob,
+        input_layout="TND",
+        actual_seq_qlen=tuple(cu_seq_len_list),
+        actual_seq_kvlen=tuple(cu_seq_kvlen_list),
+        pre_tockens=pre_tocken,
+        next_tockens=next_tocken,
+        inner_precise=0,
+        sparse_mode=sparse_mode,
+        prefix=None
+    )
     out_npu = npu_rst[0]
     x_max_npu = npu_rst[1]
     x_sum_npu = npu_rst[2]
@@ -106,13 +110,43 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
     # convert max + sum to LSE: lse = max + log(sum), shape [T, N, 8] -> [T, N, 1]
     softmax_lse = (x_max_npu[..., 0:1] + torch.log(x_sum_npu[..., 0:1])).contiguous()
 
-    cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int64).cpu()
-    cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int64).cpu()
+    cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int64).npu()
+    cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int64).npu()
 
     # call tridao npu interface
     print("cu_seqlens_q is ", cu_seqlens_q)
     print("cu_seqlens_k is ", cu_seqlens_k)
     print("softmax_lse.shape ", softmax_lse.shape)
+
+    q_fa = q.detach().clone()
+    k_fa = k.detach().clone()
+    v_fa = v.detach().clone()
+
+    q_fa.requires_grad = True
+    k_fa.requires_grad = True
+    v_fa.requires_grad = True
+
+    # TODO adapt softmaxlse layout
+    # out_fa = flash_attn_varlen_func(
+    #     q_fa, k_fa, v_fa,
+    #     cu_seqlens_q,
+    #     cu_seqlens_k,
+    #     max_seqlen_q,
+    #     max_seqlen_k,
+    #     dropout_p=(1 - keep_prob),
+    #     softmax_scale=scale,
+    #     causal=causal_switch,
+    #     window_size=(window_left, window_right),
+    #     alibi_slopes=None,
+    #     deterministic=False,
+    #     return_attn_probs=False,
+    #     block_table=None
+    # )
+    # (
+    #     dq_tridao,
+    #     dk_tridao,
+    #     dv_tridao,
+    # ) = torch.autograd.grad(out_fa, (q_fa, k_fa, v_fa), dout)
 
     dq_tridao, dk_tridao, dv_tridao = flash_attn_varlen_func_backward(
         dout,
@@ -139,5 +173,4 @@ def test_tnd_bwd_npu(nheads, nheads_k, headdim, list_seq):
     data_compare(dv_tridao.cpu().float().numpy(), dv_golden_npu.cpu().float().numpy())
 
 
-
-test_tnd_bwd_npu(1, 1, 128, [512])
+test_tnd_bwd_npu(2, 1, 128, [512])
