@@ -73,7 +73,7 @@ else:
     _torch_register_fake_wrapper = noop_register_fake_wrapper
 
 
-@_torch_custom_op_wrapper("flash_attn::_flash_attn_forward", mutates_args=(), device_types="cuda")
+@_torch_custom_op_wrapper("flash_attn::_flash_attn_forward", mutates_args=(), device_types="npu")
 def _flash_attn_forward(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -136,13 +136,10 @@ def _flash_attn_forward_fake(
     return out, softmax_lse, p, rng_state
 
 
-if torch.__version__ >= "2.4.0":
-    _wrapped_flash_attn_forward = torch.ops.flash_attn._flash_attn_forward
-else:
-    _wrapped_flash_attn_forward = _flash_attn_forward
+_wrapped_flash_attn_forward = _flash_attn_forward
 
 
-@_torch_custom_op_wrapper("flash_attn::_flash_attn_varlen_forward", mutates_args=(), device_types="cuda")
+@_torch_custom_op_wrapper("flash_attn::_flash_attn_varlen_forward", mutates_args=(), device_types="npu")
 def _flash_attn_varlen_forward(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -232,11 +229,7 @@ def _flash_attn_varlen_forward_fake(
     return out, softmax_lse, p, rng_state
 
 
-if torch.__version__ >= "2.4.0":
-    _wrapped_flash_attn_varlen_forward = torch.ops.flash_attn._flash_attn_varlen_forward
-else:
-    _wrapped_flash_attn_varlen_forward = _flash_attn_varlen_forward
-
+_wrapped_flash_attn_varlen_forward = _flash_attn_varlen_forward
 
 @_torch_custom_op_wrapper("flash_attn::_flash_attn_backward", mutates_args=("dq", "dk", "dv"), device_types="cuda")
 def _flash_attn_backward(
