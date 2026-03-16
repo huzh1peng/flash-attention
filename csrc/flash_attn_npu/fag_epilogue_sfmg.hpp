@@ -36,14 +36,11 @@ using AscendC::TQue;
 namespace Catlass::Epilogue::Block {
 
 template <
-    class OutputType_,
-    class UpdateType_,
-    class InputType_>
+    typename ElementVecDtype
+>
 class BlockEpilogue<
     EpilogueAtlasA2FAGSfmg,
-    OutputType_,
-    UpdateType_,
-    InputType_>
+    ElementVecDtype>    
 {
 public:
     using DispatchPolicy = EpilogueAtlasA2FAGSfmg;
@@ -74,7 +71,7 @@ public:
         dAlign = (headdim + 15) / 16 * 16;
         cu_seq_qlen_addr = cu_seq_qlen;
 
-        n_stride = (nheads - 1) * headdim * sizeof(half);
+        n_stride = (nheads - 1) * headdim * sizeof(ElementVecDtype);
 
         AscendC::GlobalTensor<uint32_t> tilingDataU32;
         tilingDataU32.SetGlobalBuffer((__gm__ uint32_t *)tiling_in);;
@@ -126,8 +123,8 @@ public:
         pipe->InitBuffer(tmpBuf, tempBufferLen); // 40K - outputBufferLen
 
         // 初始化 GM
-        doutGm.SetGlobalBuffer((__gm__ half *)dout);
-        outGm.SetGlobalBuffer((__gm__ half *)out);
+        doutGm.SetGlobalBuffer((__gm__ ElementVecDtype *)dout);
+        outGm.SetGlobalBuffer((__gm__ ElementVecDtype *)out);
         sfmgWorkspaceGm.SetGlobalBuffer((__gm__ float *)workspace + sfmgWorkspaceOffset / sizeof(float));
     }
 
@@ -163,11 +160,11 @@ public:
         srcOffset = bOffset + (sIdx * nheads + nIdx) * headdim;
 
         DataCopyPad(input1Buf[dstOffset], doutGm[srcOffset],
-                    {static_cast<uint16_t>(curNBurst), static_cast<uint32_t>(headdim * sizeof(half)),
+                    {static_cast<uint16_t>(curNBurst), static_cast<uint32_t>(headdim * sizeof(ElementVecDtype)),
                     static_cast<uint32_t>(n_stride), 0, 0},
                     {true, 0, static_cast<uint8_t>((dAlign - headdim)), 0});
         DataCopyPad(input2Buf[dstOffset], outGm[srcOffset],
-                    {static_cast<uint16_t>(curNBurst), static_cast<uint32_t>(headdim * sizeof(half)),
+                    {static_cast<uint16_t>(curNBurst), static_cast<uint32_t>(headdim * sizeof(ElementVecDtype)),
                     static_cast<uint32_t>(n_stride), 0, 0},
                     {true, 0, static_cast<uint8_t>((dAlign - headdim)), 0});
     }
@@ -237,8 +234,8 @@ public:
 
                 // copyIn
                 if (i == 0) {
-                    input1Buf = inBuffer1.Get<half>();
-                    input2Buf = inBuffer2.Get<half>();
+                    input1Buf = inBuffer1.Get<ElementVecDtype>();
+                    input2Buf = inBuffer2.Get<ElementVecDtype>();
                     InitIndex((startIdx + i * singleLoopNBurstNum) * headdim,
                             curS, cu_seq_qlen_addr);
                     CopyInSfmg(nBurst, curS, cu_seq_qlen_addr);
@@ -260,8 +257,8 @@ public:
                     AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(Mte2WaitV);
                     AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(Mte2WaitV);
                     int64_t nextNBurst = i == singleCoreLoopTimes - 2 ? singleCoreLastLoopNBurstNum : nBurst;
-                    input1Buf = inBuffer1.Get<half>();
-                    input2Buf = inBuffer2.Get<half>();
+                    input1Buf = inBuffer1.Get<ElementVecDtype>();
+                    input2Buf = inBuffer2.Get<ElementVecDtype>();
                     InitIndex((startIdx + (i + 1) * singleLoopNBurstNum) * headdim,
                             curS, cu_seq_qlen_addr);
                     CopyInSfmg(nextNBurst, curS, cu_seq_qlen_addr);
@@ -315,8 +312,8 @@ protected:
     uint32_t cBlockIdx;
 
     GlobalTensor<float> sfmgWorkspaceGm;
-    GlobalTensor<half> doutGm;
-    GlobalTensor<half> outGm;
+    GlobalTensor<ElementVecDtype> doutGm;
+    GlobalTensor<ElementVecDtype> outGm;
     TBuf<QuePosition::VECIN> inBuffer1, inBuffer2;
     TBuf<> cast1Buf, cast2Buf, tmpBuf;
     TBuf<QuePosition::VECOUT> outBuffer1;
@@ -345,8 +342,8 @@ protected:
     int64_t tailCoreLoopTimes;
     int64_t tailCoreLastLoopNBurstNum;
 
-    LocalTensor<half> input1Buf;
-    LocalTensor<half> input2Buf;
+    LocalTensor<ElementVecDtype> input1Buf;
+    LocalTensor<ElementVecDtype> input2Buf;
     LocalTensor<float> outputBuf;
 
     SoftMaxTiling softmaxGradTilingData;
