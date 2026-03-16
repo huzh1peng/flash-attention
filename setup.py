@@ -269,6 +269,7 @@ class BishengBuildExt(build_ext):
             "-DENABLE_ASCENDC_DUMP",
             "-DASCENDC_DUMP=1",
             "-DASCENDC_DEBUG",
+            "-DCATLASS_ARCH=2201",
             *[f"-I{p}" for p in asc_config["include_dirs"]],
             f"-I{dep_paths['python']['include']}",
             f"-I{dep_paths['torch_npu']['include']}",
