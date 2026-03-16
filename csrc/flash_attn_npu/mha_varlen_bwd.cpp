@@ -29,9 +29,6 @@
 #include "catlass/layout/layout.hpp"
 
 #include "kernel_operator.h"
-// #include "kernel_tiling/kernel_tiling.h"
-// #include "lib/matmul_intf.h"
-// #include "lib/matrix/matmul/tiling.h"
 #include "fag_common/common_header.h"
 #include "fag_common/cube_addr.h"
 #include "fag_common/vector_addr.h"
@@ -170,12 +167,6 @@ public:
         bool running = true;
 
         CubeAddr cubeAddr;
-        if (GetBlockIdx() == 0) {
-            uint64_t cuSeqQlen = ((__gm__ int64_t *)params.cu_seq_qlen + 1)[0];
-            uint64_t cuSeqKvlen = ((__gm__ int64_t *)params.cu_seq_kvlen + 1)[0];
-            AscendC::PRINTF("cube batch is %d, heads is %d, g is %d, headdim is %d, mixCoreNum is %d, cuSeqQlen is %d, cuSeqkvlen is %d\n", 
-                                batch, nheads, g, headdim, mixCoreNum, cuSeqQlen, cuSeqKvlen);
-        }
         cubeAddr.init(batch, nheads, g, headdim, GetBlockIdx(), (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_qlen + 1), (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_kvlen + 1), mixCoreNum);
 
         uint32_t pingpongFlagL1A = 0;
@@ -188,16 +179,15 @@ public:
         BlockMmadFAGCube2 blockMmadFAGCube2(resource, nheads, nheads_k, headdim);
         BlockMmadFAGCube3 blockMmadFAGCube3(resource, nheads, nheads_k, headdim);
         
-        // AscendC::PRINTF("ENTER FAG KERNEL AIC CUSTOM %d\n", GetBlockIdx());
         while (running) {
             cubeAddrInfo[taskId % 2].taskId = taskId;
             cubeAddr.addr_mapping(&cubeAddrInfo[taskId % 2]);
             if (cubeAddrInfo[taskId % 2].blockLength > 0) {
                 SetFlag();
                 CubeAddrInfo addrs = cubeAddrInfo[taskId % 2];
-                blockMmadFAGCube1(cubeAddrInfo[taskId % 2], (__gm__ half*)(params.q), (__gm__ half*)(params.k), (__gm__ float*)(params.workspace + mm2WorkspaceOffset), 
+                blockMmadFAGCube1(cubeAddrInfo[taskId % 2], (__gm__ ElementA1*)(params.q), (__gm__ ElementB1 *)(params.k), (__gm__ float*)(params.workspace + mm2WorkspaceOffset), 
                     pingpongFlagL1A, pingpongFlagL0A, pingpongFlagL1B, pingpongFlagL0B, pingpongFlagC);
-                blockMmadFAGCube1(cubeAddrInfo[taskId % 2], (__gm__ half*)(params.dout), (__gm__ half*)(params.v), (__gm__ float*)(params.workspace + mm1WorkspaceOffset), 
+                blockMmadFAGCube1(cubeAddrInfo[taskId % 2], (__gm__ ElementA1*)(params.dout), (__gm__ ElementB1*)(params.v), (__gm__ float*)(params.workspace + mm1WorkspaceOffset), 
                     pingpongFlagL1A, pingpongFlagL0A, pingpongFlagL1B, pingpongFlagL0B, pingpongFlagC);
                 WaitFlag();
                 AscendC::CrossCoreSetFlag<2, PIPE_FIX>(CUBE2VEC);
@@ -205,22 +195,21 @@ public:
             if (taskId > 0 && cubeAddrInfo[(taskId - 1) % 2].blockLength > 0) {
                 AscendC::WaitEvent(VEC2CUBE);
                 SetFlag();
-                blockMmadFAGCube2(cubeAddrInfo[(taskId - 1) % 2], (__gm__ half*)(params.workspace + dsWorkSpaceOffset), (__gm__ half*)(params.k), (__gm__ float*)(params.workspace + dqWorkSpaceOffset), 
+                blockMmadFAGCube2(cubeAddrInfo[(taskId - 1) % 2], (__gm__ ElementA2*)(params.workspace + dsWorkSpaceOffset), (__gm__ ElementB2*)(params.k), (__gm__ float*)(params.workspace + dqWorkSpaceOffset), 
                     pingpongFlagL1A, pingpongFlagL0A, pingpongFlagL1B, pingpongFlagL0B);
                 WaitFlag();
                 SetFlag();
-                blockMmadFAGCube3(cubeAddrInfo[(taskId - 1) % 2], (__gm__ half*)(params.workspace + pWorkSpaceOffset), (__gm__ half*)(params.dout), (__gm__ float*)(params.workspace + dvWorkSpaceOffset), 
+                blockMmadFAGCube3(cubeAddrInfo[(taskId - 1) % 2], (__gm__ ElementA3*)(params.workspace + pWorkSpaceOffset), (__gm__ ElementB3*)(params.dout), (__gm__ float*)(params.workspace + dvWorkSpaceOffset), 
                     pingpongFlagL1A, pingpongFlagL0A, pingpongFlagL1B, pingpongFlagL0B, pingpongFlagC);
                 WaitFlag();
                 SetFlag();
-                blockMmadFAGCube3(cubeAddrInfo[(taskId - 1) % 2], (__gm__ half*)(params.workspace + dsWorkSpaceOffset), (__gm__ half*)(params.q), (__gm__ float*)(params.workspace + dkWorkSpaceOffset), 
+                blockMmadFAGCube3(cubeAddrInfo[(taskId - 1) % 2], (__gm__ ElementA3*)(params.workspace + dsWorkSpaceOffset), (__gm__ ElementB3*)(params.q), (__gm__ float*)(params.workspace + dkWorkSpaceOffset), 
                     pingpongFlagL1A, pingpongFlagL0A, pingpongFlagL1B, pingpongFlagL0B, pingpongFlagC);
                 WaitFlag();
             }
             if (cubeAddrInfo[taskId % 2].blockLength == 0) {
                 running = false;
             }
-            AscendC::PRINTF("cube blockId is %d, taskId is %d\n", GetBlockIdx(), taskId);
             taskId++;
         }
         AscendC::CrossCoreSetFlag<2, PIPE_FIX>(CUBE2POST);
@@ -260,12 +249,7 @@ public:
         EpilogueFAGOp epilogueFagOp(resource, &pipeVec, params.row_lse,
             params.atten_mask, (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_qlen + 1), (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_kvlen + 1), params.workspace, batch, params.tiling_data);
 
-        // AscendC::PRINTF("ENTER FAG KERNEL AIV %d\n", GetBlockIdx());
         VectorAddr vector_addr;
-        if (GetBlockIdx() == 0) {
-            AscendC::PRINTF("vector batch is %d, heads is %d, g is %d, headdim is %d, mixCoreNum is %d\n", 
-                                batch, nheads, g, headdim, mixCoreNum);
-        }
         vector_addr.init(batch, nheads, g, headdim, GetBlockIdx() / 2, (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_qlen + 1), (__gm__ uint8_t *)((__gm__ int64_t *)params.cu_seq_kvlen + 1), mixCoreNum);
         int32_t taskId = 0;
         bool running = true;
@@ -280,7 +264,6 @@ public:
             if (vecAddrInfo.blockLength == 0) {
                 running = false;
             }
-            AscendC::PRINTF("vector blockId is %d, taskId is %d\n", GetBlockIdx(), taskId);
             taskId++;
         }
         pipeVec.Destroy();
@@ -332,6 +315,8 @@ private:
     Arch::Resource<ArchTag> resource;
 };
 
+template <
+    typename InputDtype = half>
 __global__ __aicore__
 void FAG(uint64_t fftsAddr,
         GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR dout,
@@ -353,9 +338,9 @@ void FAG(uint64_t fftsAddr,
 
     using ArchTag = Arch::AtlasA2;
     // Cube1 计算：左矩阵不转置，右矩阵转置。实现 (Q * K^T) 和 dP = dOut * V^T
-    using ElementA1 = half;               // q和dout
+    using ElementA1 = InputDtype;               // q和dout
     using LayoutA1 = layout::RowMajor;
-    using ElementB1 = half;               // k和v
+    using ElementB1 = InputDtype;               // k和v
     using LayoutB1 = layout::ColumnMajor;
     using ElementC1 = float;
     using LayoutC1 = layout::RowMajor;
@@ -368,9 +353,9 @@ void FAG(uint64_t fftsAddr,
     using BlockMmadFAGCube1 = Catlass::Gemm::Block::BlockMmad<DispatchPolicyCube1, L1TileShapeCube1, L0TileShapeCube1, A1Type, B1Type, C1Type>;
 
     // Cube2 计算：左矩阵不转置，右矩阵不转置。实现 dQ = dS * K
-    using ElementA2 = half;           // ds
+    using ElementA2 = InputDtype;           // ds
     using LayoutA2 = layout::RowMajor;
-    using ElementB2 = half;           // k
+    using ElementB2 = InputDtype;           // k
     using LayoutB2 = layout::RowMajor;
     using ElementC2 = float;
     using LayoutC2 = layout::RowMajor;
@@ -385,9 +370,9 @@ void FAG(uint64_t fftsAddr,
     using BlockMmadFAGCube2 = Catlass::Gemm::Block::BlockMmad<DispatchPolicyCube2, L1TileShapeCube2, L0TileShapeCube2, A2Type, B2Type, C2Type>;
 
     // Cube3 计算：左矩阵转置，右矩阵不转置。 实现 dK = dS^T * Q 和 dV = P^T * dOut
-    using ElementA3 = half;              // ds和p
+    using ElementA3 = InputDtype;              // ds和p
     using LayoutA3 = layout::ColumnMajor;
-    using ElementB3 = half;              // q和dout
+    using ElementB3 = InputDtype;              // q和dout
     using LayoutB3 = layout::RowMajor;
     using ElementC3 = float;
     using LayoutC3 = layout::RowMajor;
@@ -402,33 +387,23 @@ void FAG(uint64_t fftsAddr,
     using BlockMmadFAGCube3 = Catlass::Gemm::Block::BlockMmad<DispatchPolicyCube3, L1TileShapeCube3, L0TileShapeCube3, A3Type, B3Type, C3Type>;
 
     // Epilogue
-    using ElementOutput = float;
-    using LayoutOutput = layout::RowMajor;
-    using OutputType = Catlass::Gemm::GemmType<ElementOutput, LayoutOutput>;
-
-    using ElementUpdate = float;
-    using LayoutUpdate = layout::RowMajor;
-    using UpdateType = Catlass::Gemm::GemmType<ElementUpdate, LayoutUpdate>;
-
-    using ElementInput = float;
-    using LayoutInput = layout::RowMajor;
-    using InputType = Catlass::Gemm::GemmType<ElementInput, LayoutInput>;
+    using ElementVecDtype = InputDtype;
 
     // VEC_Pre ：dQ/dOut/dV的workspace清零
     using EpilogueAtlasA2FAGPre = Catlass::Epilogue::EpilogueAtlasA2FAGPre;
-    using EpilogueFAGPre = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGPre, OutputType, UpdateType, InputType>;
+    using EpilogueFAGPre = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGPre, ElementVecDtype>;
 
     // VEC_Sfmg ：计算 SoftmaxGrad(dOut, atten_in)
     using EpilogueAtlasA2FAGSfmg = Catlass::Epilogue::EpilogueAtlasA2FAGSfmg;
-    using EpilogueFAGSfmg = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGSfmg, OutputType, UpdateType, InputType>;
+    using EpilogueFAGSfmg = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGSfmg, ElementVecDtype>;
 
     // VEC_Op：计算S = Mask(Q*K^T)，并完成重计算 P = Softmax(S)，再计算dS = P * Sub(dP, Sfmg)
     using EpilogueAtlasA2FAGOp = Catlass::Epilogue::EpilogueAtlasA2FAGOp;
-    using EpilogueFAGOp = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGOp, OutputType, UpdateType, InputType>;
+    using EpilogueFAGOp = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGOp, ElementVecDtype>;
 
     // VEC_Post：dQ*scale和dK*scale，并搬运输出dQ/dK/dV
     using EpilogueAtlasA2FAGPost = Catlass::Epilogue::EpilogueAtlasA2FAGPost;
-    using EpilogueFAGPost = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGPost, OutputType, UpdateType, InputType>;
+    using EpilogueFAGPost = Catlass::Epilogue::Block::BlockEpilogue<EpilogueAtlasA2FAGPost, ElementVecDtype>;
 
 
     // Kernel level
