@@ -270,12 +270,20 @@ public:
     CATLASS_DEVICE
     void CopyInSoftMax(LocalTensor<float> &dstTensor, uint32_t s1Extend, uint32_t softMaxOffset)
     {
-        AscendC::DataCopyPad(dstTensor, rowLseGm[softMaxOffset],
-                    {1, static_cast<uint16_t>(s1Extend * sizeof(float)), 0, 0}, {false, 0, 0, 0});
+        int64_t nheads = nheads_k * g;
+        AscendC::DataCopyExtParams lseCopyParam;
+        lseCopyParam.blockCount = s1Extend;
+        lseCopyParam.blockLen = sizeof(float);
+        lseCopyParam.srcStride = (nheads - 1) * sizeof(float);
+        lseCopyParam.dstStride = 0;
+        lseCopyParam.rsv = 0;
+        AscendC::DataCopyPad(dstTensor, rowLseGm[softMaxOffset], lseCopyParam, {false, 0, 0, 0});
         event_t eventId = static_cast<event_t>(GetTPipePtr()->FetchEventID(AscendC::HardEvent::MTE2_V));
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(eventId);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(eventId);
-        AscendC::Brcb(dstTensor[64 * 8], dstTensor, (s1Extend + 7) / 8, {1, 8});
+        for (uint32_t i = 0; i < s1Extend; i++) {
+            AscendC::Brcb(dstTensor[64 * 8 + i * 8], dstTensor[i * 8], 1, {1, 8});
+        }
         AscendC::PipeBarrier<PIPE_V>();
         AscendC::Duplicate(dstTensor, 1.0f, s1Extend * 8);
     }
@@ -471,13 +479,18 @@ public:
             s2ExtendAlign = (s2Extend + 15) / 16 * 16;
 
             //offset
-            lseOffset = 0;
+            int64_t globalSeqStart = (blockInfo.batchIdx > 0)
+                ? ((__gm__ int64_t *)cu_seq_qlen_addr)[blockInfo.batchIdx - 1]
+                : 0;
+            int64_t seqOffsetInBlock = blockInfo.SeqQIdx * S1_CUBESIZE + curSeqQIdx * s1VecSize;
+            int64_t nheads = nheads_k * g;
+            int64_t headIdx = blockInfo.nheadsKIdx * g + blockInfo.gIdx;
+            lseOffset = (globalSeqStart + seqOffsetInBlock) * nheads + headIdx;
+
             sfmgOffset = 0;
             if (blockInfo.batchIdx > 0) {
-                lseOffset = ((__gm__ int64_t *)cu_seq_qlen_addr)[blockInfo.batchIdx - 1] * nheads_k * g;
-                sfmgOffset = lseOffset * 8;
+                sfmgOffset = ((__gm__ int64_t *)cu_seq_qlen_addr)[blockInfo.batchIdx - 1] * nheads_k * g * 8;
             }
-            lseOffset += (blockInfo.nheadsKIdx * g + blockInfo.gIdx) * cuQSeqLen + blockInfo.SeqQIdx * S1_CUBESIZE + curSeqQIdx * s1VecSize;
             sfmgOffset += ((blockInfo.nheadsKIdx * g + blockInfo.gIdx) * cuQSeqLen + blockInfo.SeqQIdx * S1_CUBESIZE + curSeqQIdx * s1VecSize) * 8;
             
             // copyIn cube_workspace params
